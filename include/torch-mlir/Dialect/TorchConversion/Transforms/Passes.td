@@ -85,3 +85,17 @@ def ConvertCustomQuantOp : InterfacePass<"torch-convert-custom-quant-op", "mlir:
   let constructor = "mlir::torch::TorchConversion::createConvertCustomQuantOpPass()";
 }
 #endif // TORCHMLIR_TORCHCONVERSION_PASSES
+
+def ExternalizeDenseConstant
+    : Pass<"torch-externalize-dense-constant", "ModuleOp"> {
+  let summary = "Externalize dense arith.constant operations";
+  let constructor =
+    "mlir::torch::TorchConversion::createExternalizeDenseConstantPass()";
+  let description = [{
+    Externalize dense arith.constant operations to lighten the IR and final program file by
+    writing the binary values in an external file and renaming constants with a pointer to 
+    the corresponding bytes in the file.
+  }];
+
+  let options = [Option<"workDir", "work-dir", "std::string", "\"\"", "Working directory, in which the weights binary file will be written">];
+}
