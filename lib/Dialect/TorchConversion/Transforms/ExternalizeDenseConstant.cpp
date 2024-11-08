@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -21,6 +22,7 @@
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/IR/AsmState.h"
+#include "llvm/Support/Debug.h"
 #include <string>
 #include <fstream>
 
@@ -44,16 +46,8 @@ class ExternalizeDenseConstantPass
     return success();
   }
 
-  void runOnOperation() override {
-    assert(workDir.length() > 0 && "No working directory specified to ExternalizeDenseConstant pass, please provide one through option \"work-dir\"");
-    
-    //Iterate through the module to find every arith.constant defining dense objects
-    ModuleOp m = getOperation();
-    m.walk([&](func::FuncOp f) {
-      f.walk([&](arith::ConstantOp op) {
-
-        if (auto denseElem = dyn_cast<DenseElementsAttr>(op.getValueAttr())) {
-          //For each dense constant: 
+  void externalize(ModuleOp m, arith::ConstantOp op, ArrayRef<char>& rawData) {
+    //For each dense constant: 
           //  - create a global uninitialized memref
           //  - replace the arith.constant with a load from that global
           //  - dump the dense constant in the binary weights output file (appending to previous weights)
@@ -91,14 +85,30 @@ class ExternalizeDenseConstantPass
 
           op.replaceAllUsesWith(castedWeight);
 
-          ArrayRef<char> rawData = denseElem.getRawData();
           std::ofstream ofs(weightOutput, std::ios::binary | std::ios::app);
           ofs.write(rawData.data(), rawData.size());
           weightOffset += rawData.size();
           ofs.flush();
           ofs.close();
-        }
+  }
 
+  void runOnOperation() override {
+    assert(workDir.length() > 0 && "No working directory specified to ExternalizeDenseConstant pass, please provide one through option \"work-dir\"");
+    
+    //Iterate through the module to find every arith.constant defining dense objects
+    ModuleOp m = getOperation();
+    m.walk([&](func::FuncOp f) {
+      f.walk([&](arith::ConstantOp op) {
+
+        if (auto denseElem = dyn_cast<DenseElementsAttr>(op.getValueAttr())) {
+          ArrayRef<char> rawData = denseElem.getRawData();
+          externalize(m, op, rawData);
+        }
+        else if (auto denseElem = dyn_cast<DenseResourceElementsAttr>(op.getValueAttr())) {
+          assert(denseElem.getRawHandle().getBlob() && "dense resource element sould have a blob");
+          ArrayRef<char> rawData = denseElem.getRawHandle().getBlob()->getData();
+          externalize(m, op, rawData);
+        }
       });
     });
   }
