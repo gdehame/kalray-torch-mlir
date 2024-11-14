@@ -69,8 +69,7 @@ class ExternalizeDenseConstantPass
                                                                                   nullptr);
           
           globalWeight->setAttr("weightOffset", builder.getIndexAttr(weightOffset));
-          if (weightOffset == 0)
-            globalWeight->setAttr("weightPath", builder.getStringAttr(weightOutput));
+          globalWeight->setAttr("weightPath", builder.getStringAttr(weightOutput));
 
           builder.setInsertionPointAfter(op);
           memref::GetGlobalOp weight = builder.create<memref::GetGlobalOp>(op->getLoc(), 
@@ -80,8 +79,7 @@ class ExternalizeDenseConstantPass
           Value castedWeight = builder.create<bufferization::ToTensorOp>(op.getLoc(), op.getType(), weight, true).getResult();
           
           weight->setAttr("weightOffset", builder.getIndexAttr(weightOffset));
-          if (weightOffset == 0)
-            weight->setAttr("weightPath", builder.getStringAttr(weightOutput));
+          weight->setAttr("weightPath", builder.getStringAttr(weightOutput));
 
           op.replaceAllUsesWith(castedWeight);
 
