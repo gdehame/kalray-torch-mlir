@@ -24,6 +24,34 @@ from .compiler_utils import (
 )
 
 
+# The set of ops that are considered legal for each backend.
+# These are currently quite load-bearing, since different backends might be
+# missing patterns for decomposed forms of certain ops.
+# TODO: Tighten up the definition of these "conditionally legal for backends"
+# ops in the backend contract, and move these lists somewhere deeper in the
+# compiler where each backend can "own" its set of legal ops.
+BACKEND_LEGAL_OPS = {
+    OutputType.TOSA: [
+        "aten.flatten.using_ints",
+        "aten.native_layer_norm",
+        "aten.linear",
+    ],
+    OutputType.LINALG_ON_TENSORS: [
+        "aten.flatten.using_ints",
+        "aten.adaptive_avg_pool1d",
+        "aten.adaptive_avg_pool2d",
+        "aten.unflatten.int",
+    ],
+    OutputType.STABLEHLO: [
+        "aten.amax",
+        "aten.amin",
+        "aten.randn.generator",
+        "aten.normal_functional",
+        "aten.fmod.Tensor",
+    ],
+}
+
+
 def _module_lowering(
     verbose,
     output_type,
