@@ -2737,6 +2737,93 @@ SmallVector<StringRef> ConvertSparseOperatorOp::legalizedNames = {
 };
 } // namespace
 
+namespace {
+class ConvertAtenAsStridedOp : public OpConversionPattern<AtenAsStridedOp> {
+public:
+  using OpConversionPattern::OpConversionPattern;
+
+  // Rewriting method.
+  LogicalResult
+  matchAndRewrite(AtenAsStridedOp op, OpAdaptor adaptor,
+		  ConversionPatternRewriter &rewriter) const override {
+  // To lower aten.as_strided to Tensor, we will first reshape the input tensor to
+  // an 1-D tensor, then calculate the indices of result elements based on the
+  // output size, stride and storage offset. With the reshaped 1-D tensor and
+  // the indices, we can apply Gather to extract the required elements into a
+  // new tensor and then reshape it back to the desired output shape.
+  auto self = adaptor.getSelf();
+
+  // Not a tensor type
+  auto selfType = dyn_cast<TensorType>(self.getType());
+  if (!selfType)
+    return rewriter.notifyMatchFailure(op, "Only tensor types are supported");
+  auto selfShape = selfType.getShape();
+
+  auto resultType =
+      dyn_cast<TensorType>(typeConverter->convertType(op.getType()));
+  auto resultElemTy = resultType.getElementType();
+
+  // Get output size
+  SmallVector<int64_t> outputSize;
+  if (!matchPattern(op.getSize(), m_TorchListOfConstantInts(outputSize)))
+    return rewriter.notifyMatchFailure(
+        op, "Only a constant list form of output size is supported");
+
+  // Get stride
+  SmallVector<int64_t> stride;
+  if (!matchPattern(op.getStride(), m_TorchListOfConstantInts(stride)))
+    return rewriter.notifyMatchFailure(
+        op, "Only a constant list form of stride is supported");
+
+  // Get storage offset
+  int64_t offset;
+  if (!matchPattern(op.getStorageOffset(), m_TorchConstantInt(&offset)))
+    offset = 0;
+
+  // Reshape input tensor into an 1-D tensor
+  ReassociationIndices reassociation;
+  for (size_t i = 0; i < selfShape.size(); i++)
+    reassociation.push_back(i);
+  auto self1D = rewriter.create<tensor::CollapseShapeOp>(
+      op->getLoc(), self, ArrayRef({reassociation}));
+
+  // Expand to match the target rank
+  int64_t selfNumElems = std::accumulate(selfShape.begin(), selfShape.end(), 1,
+                                         std::multiplies<int64_t>());
+  reassociation.clear();
+  for (size_t i = 0; i < outputSize.size(); i++)
+    reassociation.push_back(i);
+  SmallVector<int64_t> shapeND;
+  shapeND.push_back(selfNumElems);
+  for (size_t i = 1; i < outputSize.size(); i++)
+    shapeND.push_back(1);
+  auto typeND =  RankedTensorType::get(ArrayRef(shapeND), resultElemTy);
+  Value selfND = rewriter.create<tensor::ExpandShapeOp>(
+      op->getLoc(), typeND, self1D.getResult(), ArrayRef({reassociation})).getResult();
+
+  // Extract the output Tensor
+  SmallVector<OpFoldResult> sliceOffsets, sliceShape, sliceStrides;
+  for (size_t i = 0; i < outputSize.size(); i++) {
+    if (i == (outputSize.size() - 1))
+      sliceOffsets.push_back(rewriter.getIndexAttr(offset));
+    else
+      sliceOffsets.push_back(rewriter.getIndexAttr(0));
+    sliceShape.push_back(rewriter.getIndexAttr(outputSize[i]));
+    sliceStrides.push_back(rewriter.getIndexAttr(stride[i]));
+  }
+  auto rankedResultType = RankedTensorType::get(ArrayRef(outputSize), resultElemTy);
+  auto result = rewriter.create<tensor::ExtractSliceOp>(
+        op->getLoc(), rankedResultType, selfND,
+	ArrayRef(sliceOffsets), ArrayRef(sliceShape), ArrayRef(sliceStrides));
+
+  rewriter.replaceOp(op, {result.getResult()});
+
+  return success();
+  }
+};
+} // namespace
+
+
 void mlir::torch::torch_to_linalg::populateDataMovementPatternsAndLegality(
     TypeConverter &typeConverter, RewritePatternSet &patterns,
     ConversionTarget &target) {
@@ -2805,4 +2892,6 @@ void mlir::torch::torch_to_linalg::populateDataMovementPatternsAndLegality(
     return !ConvertSparseOperatorOp::isSparsePrimitive(op.getNameAttr());
   });
   patterns.add<ConvertSparseOperatorOp>(typeConverter, context);
+  target.addIllegalOp<AtenAsStridedOp>();
+  patterns.add<ConvertAtenAsStridedOp>(typeConverter, context);
 }
