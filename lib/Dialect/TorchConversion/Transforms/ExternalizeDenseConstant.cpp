@@ -6,7 +6,6 @@
 // Also available under a BSD-style license. See LICENSE.
 //
 //===----------------------------------------------------------------------===//
-#include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/DialectResourceBlobManager.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -23,10 +22,7 @@
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "mlir/IR/AsmState.h"
-#include "llvm/ADT/ArrayRef.h"
-#include "llvm/ADT/SmallVector.h"
-#include <cstddef>
-#include <cstdint>
+#include "llvm/Support/Debug.h"
 #include <string>
 #include <fstream>
 
@@ -52,104 +48,46 @@ class ExternalizeDenseConstantPass
 
   void externalize(ModuleOp m, arith::ConstantOp op, ArrayRef<char>& rawData) {
     //For each dense constant: 
-    //  - create a global uninitialized memref
-    //  - replace the arith.constant with a load from that global
-    //  - dump the dense constant in the binary weights output file (appending to previous weights)
-    //  - compute and add as attribute to the two operations the offset in the binary file at which the dense constant starts 
-    std::string name = "kvx_weight" + std::to_string(weightOffset);
-    OpBuilder builder = OpBuilder(m->getContext());
-    builder.setInsertionPointToStart(m.getBody());
+          //  - create a global uninitialized memref
+          //  - replace the arith.constant with a load from that global
+          //  - dump the dense constant in the binary weights output file (appending to previous weights)
+          //  - compute and add as attribute to the two operations the offset in the binary file at which the dense constant starts 
+          std::string name = "kvx_weight" + std::to_string(weightOffset);
+          OpBuilder builder = OpBuilder(m->getContext());
+          builder.setInsertionPointToStart(m.getBody());
           
-    ShapedType shapedType = dyn_cast<ShapedType>(op.getType());
-    if (!shapedType)
-      return;
+          ShapedType shapedType = dyn_cast<ShapedType>(op.getType());
+          if (!shapedType)
+            return;
 
-    SmallVector<char> data;
-    linalg::TransposeOp weightTranspose = NULL;
-    ArrayRef<int64_t> weightShape = shapedType.getShape();
-    if (op->hasOneUse())
-      weightTranspose = dyn_cast<linalg::TransposeOp>(*op->getUsers().begin());
-    if (weightTranspose && weightTranspose->getNumResults() == 1 && 
-        weightTranspose.getPermutation().size() == 2 && 
-        weightTranspose.getPermutation()[0] == 1 && 
-        weightTranspose.getPermutation()[1] == 0) {
-      // Transpose the shape and compute an inverse permutation of linalg.transpose's permutation
-      SmallVector<int64_t> shape;
-      SmallVector<uint> inversePermutation(weightTranspose.getPermutation().size());
-      for (auto [index, dimension] : llvm::enumerate(weightTranspose.getPermutation())) {
-        shape.push_back(shapedType.getShape()[dimension]);
-        inversePermutation[dimension] = index;
-      }
-      weightShape = shape;
-
-      // Transpose the data
-      SmallVector<uint> indexingVector;
-      for (size_t i = 0; i < shape.size(); i++)
-        indexingVector.push_back(0);
-      while (true) {
-        uint64_t dataIndex = 0;
-        // Compute the index pointing to the non-transposed weight element corresponding to the element we
-        // currently want to write in the transposed weight
-        for (auto [index, dimension] : llvm::enumerate(shapedType.getShape())) {
-          dataIndex = dataIndex * dimension + indexingVector[inversePermutation[index]];
-        }
-        dataIndex *= shapedType.getElementTypeBitWidth() / 8;
-                
-        for (uint i = 0; i < shapedType.getElementTypeBitWidth() / 8; i++)
-          data.push_back(rawData[dataIndex + i]);
-                  
-        // Update the indexingVector to point to the next element of the transposed tensor
-        int indexUpdate = shape.size()-1;
-        while (indexUpdate >= 0) {
-          if (indexingVector[indexUpdate] != shape[indexUpdate] - 1) {
-            indexingVector[indexUpdate]++;
-            break;
-          }
-          indexingVector[indexUpdate] = 0;
-          indexUpdate--;
-        }
-        if (indexUpdate < 0)
-          break;
-      }
-    }
-
-    memref::GlobalOp globalWeight = builder.create<memref::GlobalOp>(m->getLoc(), 
-                                                                    builder.getStringAttr(name),
-                                                                    builder.getStringAttr("private"),
-                                                                    MemRefType::get(weightShape, shapedType.getElementType()),
-                                                                    UnitAttr::get(m->getContext()),
-                                                                    false,
-                                                                    nullptr);
+          memref::GlobalOp globalWeight = builder.create<memref::GlobalOp>(m->getLoc(), 
+                                                                                  builder.getStringAttr(name),
+                                                                                  builder.getStringAttr("private"),
+                                                                                  MemRefType::get(shapedType.getShape(), shapedType.getElementType()),
+                                                                                  UnitAttr::get(m->getContext()),
+                                                                                  false,
+                                                                                  nullptr);
           
-    globalWeight->setAttr("weightOffset", builder.getIndexAttr(weightOffset));
-    globalWeight->setAttr("weightPath", builder.getStringAttr(weightOutput));
+          globalWeight->setAttr("weightOffset", builder.getIndexAttr(weightOffset));
+          globalWeight->setAttr("weightPath", builder.getStringAttr(weightOutput));
 
-    builder.setInsertionPointAfter(op);
-    memref::GetGlobalOp weight = builder.create<memref::GetGlobalOp>(op->getLoc(), 
-                                                                    MemRefType::get(weightShape, shapedType.getElementType()), 
-                                                                    StringRef(name));
-    builder.setInsertionPointAfter(weight);
-    Value castedWeight = builder.create<bufferization::ToTensorOp>(op.getLoc(), weight, true).getResult();
+          builder.setInsertionPointAfter(op);
+          memref::GetGlobalOp weight = builder.create<memref::GetGlobalOp>(op->getLoc(), 
+                                                                          MemRefType::get(shapedType.getShape(), shapedType.getElementType()), 
+                                                                          StringRef(name));
+          builder.setInsertionPointAfter(weight);
+          Value castedWeight = builder.create<bufferization::ToTensorOp>(op.getLoc(), op.getType(), weight, true).getResult();
           
-    weight->setAttr("weightOffset", builder.getIndexAttr(weightOffset));
-    weight->setAttr("weightPath", builder.getStringAttr(weightOutput));
+          weight->setAttr("weightOffset", builder.getIndexAttr(weightOffset));
+          weight->setAttr("weightPath", builder.getStringAttr(weightOutput));
 
-    if (weightTranspose)
-      weightTranspose->getResult(0).replaceAllUsesWith(castedWeight);
-    else
-      op.replaceAllUsesWith(castedWeight);
+          op.replaceAllUsesWith(castedWeight);
 
-    std::ofstream ofs(weightOutput, std::ios::binary | std::ios::app);
-    if (data.size()) {
-      ofs.write(data.data(), data.size());
-      weightOffset += data.size();
-    }
-    else {
-      ofs.write(rawData.data(), rawData.size());
-      weightOffset += rawData.size();
-    }
-    ofs.flush();
-    ofs.close();
+          std::ofstream ofs(weightOutput, std::ios::binary | std::ios::app);
+          ofs.write(rawData.data(), rawData.size());
+          weightOffset += rawData.size();
+          ofs.flush();
+          ofs.close();
   }
 
   void runOnOperation() override {
