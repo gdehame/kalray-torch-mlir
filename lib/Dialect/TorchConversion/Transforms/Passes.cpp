@@ -9,6 +9,7 @@
 
 #include "torch-mlir/Dialect/TorchConversion/Transforms/Passes.h"
 #include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
@@ -75,6 +76,7 @@ void TorchConversion::createTorchBackendToLinalgOnTensorsBackendPipeline(
   // We do this first as it tends to involve pattern-matching against constants,
   // (e.g. dimensions which must be constant in a ranked programming model)
   // and those constants get somewhat obscured by TorchToArith.
+  pm.addNestedPass<func::FuncOp>(createLowerCol2imPass());
   pm.addNestedPass<func::FuncOp>(createConvertTorchToTMTensorPass());
   pm.addNestedPass<func::FuncOp>(createCanonicalizerPass());
   pm.addNestedPass<func::FuncOp>(createConvertTorchToLinalgPass());

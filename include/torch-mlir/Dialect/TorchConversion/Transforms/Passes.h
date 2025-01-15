@@ -10,6 +10,7 @@
 #ifndef TORCHMLIR_DIALECT_TORCHCONVERSION_TRANSFORMS_PASSES_H
 #define TORCHMLIR_DIALECT_TORCHCONVERSION_TRANSFORMS_PASSES_H
 
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Pass/Pass.h"
 #include "torch-mlir/Dialect/Torch/Transforms/Passes.h"
@@ -80,6 +81,7 @@ createVerifyLinalgOnTensorsBackendContractPass();
 std::unique_ptr<OperationPass<ModuleOp>> createVerifyTosaBackendContractPass();
 
 std::unique_ptr<OperationPass<ModuleOp>> createExternalizeDenseConstantPass();
+std::unique_ptr<InterfacePass<FunctionOpInterface>> createLowerCol2imPass();
 
 } // namespace TorchConversion
 

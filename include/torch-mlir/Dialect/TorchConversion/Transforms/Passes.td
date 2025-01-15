@@ -99,3 +99,13 @@ def ExternalizeDenseConstant
 
   let options = [Option<"workDir", "work-dir", "std::string", "\"\"", "Working directory, in which the weights binary file will be written">];
 }
+
+def LowerCol2im
+    : InterfacePass<"torch-lower-col2im", "mlir::FunctionOpInterface"> {
+  let summary = "Lower torch.aten.col2im to linalg on tensor ops";
+  let constructor =
+    "mlir::torch::TorchConversion::createLowerCol2imPass()";
+  let description = [{
+    This pass lowers the torch col2im operation into linalg on tensor operations.
+  }];
+}
