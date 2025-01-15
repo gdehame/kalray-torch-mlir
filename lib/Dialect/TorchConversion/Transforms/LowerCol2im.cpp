@@ -177,6 +177,25 @@ class LowerCol2imPass
                                           1 + ((paddedWidth - 1 - (kernelWidth - 1) * horizontalDilation)) / horizontalStride},
                         outputType.getElementType());
 
+      assert(((isa<ComplexType>(output.getElementType()) && 
+              (cast<ComplexType>(output.getElementType()).getElementType().isInteger()
+              || isa<FloatType>(cast<ComplexType>(output.getElementType()).getElementType())))
+            || isa<FloatType>(output.getElementType()) || output.getElementType().isInteger()) && "Not implemented yet\n");
+       
+      TypedAttr init0 = outputType.getElementType().isInteger() ? 
+                  rewriter.getIntegerAttr(outputType.getElementType(), 0)
+                  : (isa<FloatType>(outputType.getElementType()) ? 
+                  rewriter.getFloatAttr(outputType.getElementType(), 0.0)
+                  : (cast<ComplexType>(outputType.getElementType()).getElementType().isInteger() ?
+                      TypedAttr(rewriter.getIntegerAttr(cast<ComplexType>(outputType.getElementType()).getElementType(), 0))
+                      : rewriter.getFloatAttr(cast<ComplexType>(outputType.getElementType()).getElementType(), 0)));
+      Value fill0 = isa<ComplexType>(outputType.getElementType()) ?
+                    rewriter.createOrFold<complex::ConstantOp>(col2imOp->getLoc(), outputType.getElementType(), 
+                                                              rewriter.getArrayAttr(ArrayRef<Attribute>{init0, init0}))
+                    : rewriter.createOrFold<arith::ConstantOp>(col2imOp->getLoc(), outputType.getElementType(), init0);
+                    
+      paddedOutput = rewriter.create<linalg::FillOp>(col2imOp->getLoc(), ValueRange(fill0), ValueRange(paddedOutput))->getResult(0);
+
       paddedOutput = rewriter.create<linalg::GenericOp>(col2imOp->getLoc(),
                                         paddedOutput.getType(),
                                         ValueRange{input, kernel, upperBounds},
