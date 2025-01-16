@@ -81,7 +81,6 @@ createVerifyLinalgOnTensorsBackendContractPass();
 std::unique_ptr<OperationPass<ModuleOp>> createVerifyTosaBackendContractPass();
 
 std::unique_ptr<OperationPass<ModuleOp>> createExternalizeDenseConstantPass();
-std::unique_ptr<InterfacePass<FunctionOpInterface>> createLowerCol2imPass();
 
 } // namespace TorchConversion
 
