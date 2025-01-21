@@ -10,10 +10,15 @@
 #include "PassDetail.h"
 
 #include "ReifyAbstractInterpCalculationsUtils.h"
+#include "mlir/IR/BuiltinTypes.h"
 #include "mlir/Transforms/DialectConversion.h"
 #include "torch-mlir/Dialect/Torch/IR/TorchOps.h"
+#include "torch-mlir/Dialect/Torch/IR/TorchTypes.h"
 #include "torch-mlir/Dialect/Torch/Transforms/Passes.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Support/Debug.h"
+#include <cstddef>
+#include <cstdint>
 
 using namespace mlir;
 using namespace mlir::torch;
@@ -258,6 +263,102 @@ void TorchMatchSpecializedBackendOp::populateSpecializedConversions(
           return success();
         }
         return failure();
+      });
+  matcher.populate(
+      "torch.aten._assert_tensor_metadata",
+      [](Torch::OperatorOp op,
+         ConversionPatternRewriter &rewriter) -> LogicalResult {
+        if (op.getOperands().size() != 6)
+          return failure();
+        if (!op.getOperands()[4].getDefiningOp() ||
+            !isa<Torch::ConstantNoneOp>(op.getOperands()[4].getDefiningOp()))
+          return failure(); // Don't know how to check the device
+        if (!op.getOperands()[5].getDefiningOp() ||
+            !isa<Torch::ConstantNoneOp>(op.getOperands()[5].getDefiningOp()))
+          return failure(); // Don't know how to check the layout
+
+        Value tensor = op.getOperands()[0];
+        Torch::ValueTensorType type = cast<Torch::ValueTensorType>(tensor.getType());
+        Value sizes = op.getOperands()[1];
+        Value strides = op.getOperands()[2];
+        Value dtype = op.getOperands()[3];
+        if (!sizes.getDefiningOp() || !strides.getDefiningOp() || !dtype.getDefiningOp())
+          return failure();
+        if (!isa<Torch::ConstantNoneOp>(dtype.getDefiningOp())) {
+          // torch c10/core/ScalarType.h ScalarType enum
+          int scalarType = cast<Torch::ConstantIntOp>(dtype.getDefiningOp()).getValue();
+          if (!type.hasDtype())
+            return failure();
+          Type elementType = type.getDtype();
+          if (!((elementType.isUnsignedInteger(8) && scalarType == 0) || 
+              (elementType.isSignedInteger(8) && scalarType == 1) ||
+              (elementType.isSignedInteger(16) && scalarType == 2) ||
+              (elementType.isSignedInteger(32) && scalarType == 3) ||
+              (elementType.isSignedInteger(64) && scalarType == 4) ||
+              (elementType.isF16() && scalarType == 5) ||
+              (elementType.isF32() && scalarType == 6) ||
+              (elementType.isF64() && scalarType == 7) ||
+              (isa<ComplexType>(elementType) && 
+                cast<ComplexType>(elementType).getElementType().isF16()
+                && scalarType == 8) ||
+              (isa<ComplexType>(elementType) && 
+                cast<ComplexType>(elementType).getElementType().isF32()
+                && scalarType == 9) ||
+              (isa<ComplexType>(elementType) && 
+                cast<ComplexType>(elementType).getElementType().isF64()
+                && scalarType == 10) ||
+              (elementType == Torch::BoolType() && scalarType == 11) ||
+              (elementType == Torch::QInt8Type() && scalarType == 12) ||
+              (elementType == Torch::QUInt8Type() && scalarType == 13) ||
+              (elementType == Torch::QInt32Type() && scalarType == 14) ||
+              (elementType.isBF16() && scalarType == 15) ||
+              (elementType.isUnsignedInteger(16) && scalarType == 27) ||
+              (elementType.isUnsignedInteger(32) && scalarType == 28) ||
+              (elementType.isUnsignedInteger(64) && scalarType == 29) ||
+              (elementType.isUnsignedInteger(1) && scalarType == 30) ||
+              (elementType.isUnsignedInteger(2) && scalarType == 31) ||
+              (elementType.isUnsignedInteger(3) && scalarType == 32) ||
+              (elementType.isUnsignedInteger(4) && scalarType == 33) ||
+              (elementType.isUnsignedInteger(5) && scalarType == 34) ||
+              (elementType.isUnsignedInteger(6) && scalarType == 35) ||
+              (elementType.isUnsignedInteger(7) && scalarType == 36) ||
+              (elementType.isSignedInteger(1) && scalarType == 37) || 
+              (elementType.isSignedInteger(2) && scalarType == 38) || 
+              (elementType.isSignedInteger(3) && scalarType == 39) || 
+              (elementType.isSignedInteger(4) && scalarType == 40) || 
+              (elementType.isSignedInteger(5) && scalarType == 41) || 
+              (elementType.isSignedInteger(6) && scalarType == 42) || 
+              (elementType.isSignedInteger(7) && scalarType == 43)))
+            return failure();
+        }
+        if (!isa<Torch::ConstantNoneOp>(sizes.getDefiningOp())) {
+          if (!isa<Torch::PrimListConstructOp>(sizes.getDefiningOp()))
+            return failure();
+          Torch::PrimListConstructOp sizesList = cast<Torch::PrimListConstructOp>(sizes.getDefiningOp());
+          if (type.getSizes().size() == sizesList.getOperands().size())
+            return failure();
+          for (auto [index, size] : llvm::enumerate(sizesList->getOperands())) {
+            if (!isa<Torch::ConstantIntOp>(size.getDefiningOp()))
+              return failure();
+            if (cast<Torch::ConstantIntOp>(size.getDefiningOp()).getValue() != (uint64_t) type.getSizes()[index])
+              return failure();
+          }
+        }
+        if (!isa<Torch::ConstantNoneOp>(strides.getDefiningOp())) {
+          assert(isa<Torch::PrimListConstructOp>(strides.getDefiningOp()) && "Not implemented yet\n");
+          Torch::PrimListConstructOp stridesList = cast<Torch::PrimListConstructOp>(strides.getDefiningOp());
+          uint64_t currentStride = 1;
+          for (size_t i = 0; i < stridesList->getNumOperands(); i++) {
+            Value stride = stridesList->getOperand(stridesList->getNumOperands() - 1 - i);
+            if (!isa<Torch::ConstantIntOp>(stride.getDefiningOp()))
+              return failure();
+            if (cast<Torch::ConstantIntOp>(stride.getDefiningOp()).getValue() != currentStride)
+              return failure();
+            currentStride *= cast<Torch::ConstantIntOp>(stride.getDefiningOp()).getValue();
+          }
+        }
+        rewriter.eraseOp(op);
+        return success();
       });
 }
 
